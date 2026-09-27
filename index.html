@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Appel-inspired Platformer</title>
+  <style>
+    :root {
+      --sky: #7dd3fc;
+      --sky2: #dbeafe;
+      --ui-bg: rgba(15, 23, 42, 0.58);
+      --ui-border: rgba(255,255,255,0.25);
+      --text: #e2e8f0;
+      --ground: #3b3b3b;
+      --wall: #d97706;
+      --platform: #f59e0b;
+      --moveplatform: #8b5cf6;
+      --apple: #facc15;
+      --apple-stem: #7c2d12;
+      --goal: #22c55e;
+      --danger: #ef4444;
+      --checkpoint: #e5e7eb;
+      --checkpoint-on: #22c55e;
+      --player: #111827;
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: linear-gradient(180deg, #0f172a, #1e293b);
+      color: var(--text);
+      font-family: Arial, sans-serif;
+    }
+
+    body {
+      display: grid;
+      place-items: center;
+    }
+
+    #game {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      background: linear-gradient(var(--sky), var(--sky2));
+      border: none;
+      image-rendering: auto;
+    }
+
+    .hud {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      pointer-events: none;
+      display: flex;
+      gap: 18px;
+      align-items: center;
+      background: var(--ui-bg);
+      border: 2px solid var(--ui-border);
+      border-radius: 999px;
+      padding: 10px 20px;
+      font-size: 18px;
+      font-weight: bold;
+      letter-spacing: 0.02em;
+      z-index: 10;
+      backdrop-filter: blur(6px);
+    }
+
+    .hud span { white-space: nowrap; }
+
+    .controls {
+      position: fixed;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      pointer-events: none;
+      background: var(--ui-bg);
+      border: 2px solid var(--ui-border);
+      border-radius: 16px;
+      padding: 10px 18px;
+      font-size: 14px;
+      z-index: 10;
+      backdrop-filter: blur(6px);
+    }
+  </style>
+</head>
+<body>
+  <div class="hud">
+    <span id="levelLabel">Level 1</span>
+    <span id="appleLabel">Apples: 0 / 0</span>
+    <span id="statusLabel">Ready</span>
+  </div>
+  <div class="controls">Move: A/D or ←/→ &nbsp;•&nbsp; Jump: W / Space / ↑ &nbsp;•&nbsp; Restart: R</div>
+  <canvas id="game"></canvas>
+
+  <script>
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    resizeCanvas();
+    window.addEventListener("resize", resizeCanvas);
+
+    const levelLabel = document.getElementById("levelLabel");
+    const appleLabel = document.getElementById("appleLabel");
+    const statusLabel = document.getElementById("statusLabel");
+
+    const keys = {};
+    const inputs = { jumpHeld: false };
+
+    const WORLD = {
+      gravity: 0.82,
+      moveAccel: 1.1,
+      airAccel: 0.75,
+      maxRun: 6.3,
+      jumpStrength: 15.5,
+      wallJumpX: 9.5,
+      wallJumpY: 14.3,
+      coyoteTime: 8,
+      jumpBuffer: 13,
+      friction: 0.82
+    };
+
+    const game = {
+      levelIndex: 0,
+      levels: [],
+      cameraX: 0,
+      cameraTargetX: 0,
+      cameraY: 0,
+      cameraTargetY: 0,
+      win: false,
+      gameOver: false
+    };
+
+    const player = {
+      x: 0,
+      y: 0,
+      w: 36,
+      h: 52,
+      vx: 0,
+      vy: 0,
+      onGround: false,
+      facing: 1,
+      wallSliding: false,
+      wallDir: 0,
+      checkpoint: null,
+      apples: 0,
+      maxApples: 0,
+      jumpBuffer: 0,
+      coyote: 0,
+      wallJumpCD: 0
+    };
+
+    const levelData = [
+      {
+        name: "The Orchard",
+        width: 5200,
+        height: 2800,
+        spawn: { x: 120, y: 600 },
+        bg: "#87ceeb",
+        platforms: [
+          { x: 0, y: 1560, w: 800, h: 280, type: "ground" },
+          { x: 1100, y: 1450, w: 400, h: 200, type: "ground" },
+          { x: 1800, y: 1350, w: 350, h: 180, type: "ground" },
+          { x: 2350, y: 1200, w: 320, h: 160, type: "ground" },
+          { x: 2900, y: 1100, w: 350, h: 150, type: "ground" },
+          { x: 3450, y: 950, w: 380, h: 140, type: "ground" },
+          { x: 4050, y: 800, w: 400, h: 140, type: "ground" },
+          { x: 4650, y: 650, w: 400, h: 140, type: "ground" },
+          { x: 650, y: 1200, w: 280, h: 500, type: "wall" },
+          { x: 950, y: 900, w: 280, h: 700, type: "wall" },
+          { x: 1550, y: 700, w: 260, h: 900, type: "wall" },
+          { x: 2100, y: 550, w: 280, h: 1000, type: "wall" },
+          { x: 2700, y: 400, w: 300, h: 1100, type: "wall" },
+          { x: 3350, y: 300, w: 280, h: 1150, type: "wall" },
+          { x: 3950, y: 200, w: 300, h: 1200, type: "wall" },
+          { x: 720, y: 950, w: 180, h: 35, type: "platform" },
+          { x: 1020, y: 750, w: 180, h: 35, type: "platform" },
+          { x: 1620, y: 500, w: 180, h: 35, type: "platform" },
+          { x: 2170, y: 350, w: 180, h: 35, type: "platform" },
+          { x: 2800, y: 200, w: 180, h: 35, type: "platform" },
+          { x: 3430, y: 80, w: 180, h: 35, type: "platform" },
+          { x: 4050, y: -50, w: 200, h: 35, type: "platform" }
+        ],
+        movingPlatforms: [
+          { x: 1400, y: 800, w: 200, h: 40, axis: "y", min: 450, max: 1200, speed: 2.0, dir: 1 },
+          { x: 2200, y: 600, w: 220, h: 40, axis: "x", min: 2100, max: 2800, speed: 2.2, dir: 1 },
+          { x: 3200, y: 400, w: 220, h: 40, axis: "y", min: 200, max: 900, speed: 2.4, dir: 1 }
+        ],
+        apples: [
+          { x: 420, y: 1350, collected: false },
+          { x: 850, y: 1100, collected: false },
+          { x: 1200, y: 950, collected: false },
+          { x: 1650, y: 650, collected: false },
+          { x: 2250, y: 500, collected: false },
+          { x: 2850, y: 350, collected: false },
+          { x: 3500, y: 200, collected: false },
+          { x: 4150, y: 150, collected: false },
+          { x: 4800, y: 400, collected: false }
+        ],
+        checkpoints: [
+          { x: 800, y: 1300, activated: false },
+          { x: 2200, y: 800, activated: false },
+          { x: 4000, y: 400, activated: false }
+        ],
+        spikes: [
+          { x: 800, y: 1560, w: 150, h: 50 },
+          { x: 1600, y: 1560, w: 150, h: 50 },
+          { x: 2400, y: 1560, w: 150, h: 50 },
+          { x: 3200, y: 1560, w: 150, h: 50 },
+          { x: 4000, y: 1560, w: 150, h: 50 }
+        ],
+        enemies: [
+          { x: 1300, y: 1400, w: 60, h: 50, minX: 1100, maxX: 1500, dir: 1, speed: 2.0 },
+          { x: 2500, y: 1150, w: 60, h: 50, minX: 2350, maxX: 2700, dir: 1, speed: 2.2 },
+          { x: 3700, y: 900, w: 60, h: 50, minX: 3450, maxX: 3900, dir: 1, speed: 2.4 }
+        ],
+        goal: { x: 5050, y: 480, w: 40, h: 120 }
+      },
+      {
+        name: "The Climb",
+        width: 5800,
+        height: 3200,
+        spawn: { x: 140, y: 1200 },
+        bg: "#93c5fd",
+        platforms: [
+          { x: 0, y: 2100, w: 900, h: 350, type: "ground" },
+          { x: 1300, y: 1900, w: 450, h: 250, type: "ground" },
+          { x: 2200, y: 1700, w: 420, h: 200, type: "ground" },
+          { x: 3100, y: 1500, w: 400, h: 180, type: "ground" },
+          { x: 4000, y: 1300, w: 400, h: 160, type: "ground" },
+          { x: 4900, y: 1100, w: 420, h: 150, type: "ground" },
+          { x: 5500, y: 900, w: 200, h: 150, type: "ground" },
+          { x: 700, y: 1200, w: 320, h: 1000, type: "wall" },
+          { x: 1200, y: 900, w: 340, h: 1300, type: "wall" },
+          { x: 1950, y: 600, w: 320, h: 1600, type: "wall" },
+          { x: 2850, y: 400, w: 330, h: 1800, type: "wall" },
+          { x: 3850, y: 200, w: 340, h: 2000, type: "wall" },
+          { x: 4850, y: 100, w: 320, h: 2100, type: "wall" },
+          { x: 800, y: 1050, w: 200, h: 40, type: "platform" },
+          { x: 1350, y: 750, w: 200, h: 40, type: "platform" },
+          { x: 2050, y: 450, w: 220, h: 40, type: "platform" },
+          { x: 2950, y: 250, w: 220, h: 40, type: "platform" },
+          { x: 3950, y: 50, w: 220, h: 40, type: "platform" },
+          { x: 4950, y: -100, w: 240, h: 40, type: "platform" }
+        ],
+        movingPlatforms: [
+          { x: 1600, y: 900, w: 240, h: 45, axis: "x", min: 1300, max: 2100, speed: 2.4, dir: 1 },
+          { x: 2800, y: 600, w: 240, h: 45, axis: "y", min: 300, max: 1200, speed: 2.6, dir: 1 },
+          { x: 4200, y: 500, w: 260, h: 45, axis: "x", min: 3900, max: 4900, speed: 2.8, dir: 1 }
+        ],
+        apples: [
+          { x: 550, y: 1400, collected: false },
+          { x: 1100, y: 1100, collected: false },
+          { x: 1650, y: 900, collected: false },
+          { x: 2250, y: 650, collected: false },
+          { x: 3100, y: 450, collected: false },
+          { x: 4000, y: 250, collected: false },
+          { x: 4950, y: 150, collected: false },
+          { x: 5650, y: 400, collected: false },
+          { x: 5750, y: 800, collected: false }
+        ],
+        checkpoints: [
+          { x: 1200, y: 1800, activated: false },
+          { x: 2900, y: 1300, activated: false },
+          { x: 4800, y: 800, activated: false }
+        ],
+        spikes: [
+          { x: 900, y: 2100, w: 180, h: 60 },
+          { x: 1800, y: 2100, w: 180, h: 60 },
+          { x: 2900, y: 2100, w: 180, h: 60 },
+          { x: 4000, y: 2100, w: 180, h: 60 },
+          { x: 5000, y: 2100, w: 180, h: 60 }
+        ],
+        enemies: [
+          { x: 1600, y: 1850, w: 70, h: 60, minX: 1300, maxX: 1800, dir: 1, speed: 2.2 },
+          { x: 2900, y: 1550, w: 70, h: 60, minX: 2700, maxX: 3200, dir: 1, speed: 2.4 },
+          { x: 4200, y: 1250, w: 70, h: 60, minX: 4000, maxX: 4600, dir: 1, speed: 2.6 }
+        ],
+        goal: { x: 5650, y: 750, w: 40, h: 150 }
+      },
+      {
+        name: "The Summit",
+        width: 6500,
+        height: 3600,
+        spawn: { x: 160, y: 1000 },
+        bg: "#c4b5fd",
+        platforms: [
+          { x: 0, y: 2400, w: 1000, h: 400, type: "ground" },
+          { x: 1400, y: 2150, w: 500, h: 300, type: "ground" },
+          { x: 2600, y: 1900, w: 480, h: 250, type: "ground" },
+          { x: 3900, y: 1650, w: 460, h: 220, type: "ground" },
+          { x: 5100, y: 1400, w: 480, h: 200, type: "ground" },
+          { x: 6100, y: 1100, w: 250, h: 180, type: "ground" },
+          { x: 800, y: 1200, w: 360, h: 1400, type: "wall" },
+          { x: 1400, y: 900, w: 380, h: 1700, type: "wall" },
+          { x: 2300, y: 600, w: 360, h: 2000, type: "wall" },
+          { x: 3300, y: 350, w: 380, h: 2250, type: "wall" },
+          { x: 4450, y: 150, w: 400, h: 2450, type: "wall" },
+          { x: 5600, y: 0, w: 380, h: 2600, type: "wall" },
+          { x: 900, y: 1050, w: 220, h: 45, type: "platform" },
+          { x: 1500, y: 750, w: 220, h: 45, type: "platform" },
+          { x: 2400, y: 450, w: 240, h: 45, type: "platform" },
+          { x: 3400, y: 200, w: 240, h: 45, type: "platform" },
+          { x: 4550, y: 0, w: 240, h: 45, type: "platform" },
+          { x: 5700, y: -150, w: 260, h: 45, type: "platform" }
+        ],
+        movingPlatforms: [
+          { x: 1750, y: 900, w: 260, h: 50, axis: "x", min: 1400, max: 2300, speed: 2.6, dir: 1 },
+          { x: 3200, y: 600, w: 280, h: 50, axis: "y", min: 300, max: 1400, speed: 2.8, dir: 1 },
+          { x: 4800, y: 400, w: 280, h: 50, axis: "x", min: 4450, max: 5400, speed: 3.0, dir: 1 }
+        ],
+        apples: [
+          { x: 600, y: 1600, collected: false },
+          { x: 1250, y: 1250, collected: false },
+          { x: 2050, y: 950, collected: false },
+          { x: 2950, y: 700, collected: false },
+          { x: 3800, y: 500, collected: false },
+          { x: 4900, y: 300, collected: false },
+          { x: 6000, y: 200, collected: false },
+          { x: 6300, y: 700, collected: false },
+          { x: 6400, y: 1200, collected: false }
+        ],
+        checkpoints: [
+          { x: 1400, y: 2050, activated: false },
+          { x: 3300, y: 1400, activated: false },
+          { x: 5400, y: 800, activated: false }
+        ],
+        spikes: [
+          { x: 1000, y: 2400, w: 200, h: 70 },
+          { x: 2200, y: 2400, w: 200, h: 70 },
+          { x: 3600, y: 2400, w: 200, h: 70 },
+          { x: 4800, y: 2400, w: 200, h: 70 },
+          { x: 6000, y: 2400, w: 200, h: 70 }
+        ],
+        enemies: [
+          { x: 1800, y: 2100, w: 80, h: 70, minX: 1400, maxX: 2000, dir: 1, speed: 2.4 },
+          { x: 3400, y: 1700, w: 80, h: 70, minX: 3200, maxX: 3800, dir: 1, speed: 2.6 },
+          { x: 5200, y: 1350, w: 80, h: 70, minX: 5000, maxX: 5600, dir: 1, speed: 2.8 }
+        ],
+        goal: { x: 6300, y: 900, w: 50, h: 180 }
+      }
+    ];
+
+    function deepCopy(obj) {
+      return JSON.parse(JSON.stringify(obj));
+    }
+
+    function rectsOverlap(a, b) {
+      return a.x < b.x + b.w &&
+             a.x + a.w > b.x &&
+             a.y < b.y + b.h &&
+             a.y + a.h > b.y;
+    }
+
+    function clamp(v, min, max) { return Math.min(Math.max(v, min), max); }
+    function setStatus(str) { statusLabel.textContent = str; }
+
+    function initLevel(index) {
+      game.levelIndex = index;
+      game.levels = deepCopy(levelData);
+      const level = game.levels[index];
+
+      player.x = level.spawn.x;
+      player.y = level.spawn.y;
+      player.vx = 0;
+      player.vy = 0;
+      player.onGround = false;
+      player.facing = 1;
+      player.wallSliding = false;
+      player.wallDir = 0;
+      player.checkpoint = { x: level.spawn.x, y: level.spawn.y };
+      player.apples = 0;
+      player.maxApples = level.apples.length;
+      player.jumpBuffer = 0;
+      player.coyote = 0;
+      player.wallJumpCD = 0;
+
+      level.apples.forEach(a => a.collected = false);
+      level.checkpoints.forEach(c => c.activated = false);
+
+      levelLabel.textContent = `Level ${index + 1}: ${level.name}`;
+      appleLabel.textContent = `Apples: 0 / ${player.maxApples}`;
+      setStatus("Ready");
+      game.win = false;
+      game.gameOver = false;
+    }
+
+    function currentLevel() { return game.levels[game.levelIndex]; }
+    function getSolidRects() { const level = currentLevel(); return [...level.platforms, ...level.movingPlatforms]; }
+
+    function updateMovingPlatforms(level) {
+      for (const mp of level.movingPlatforms) {
+        const prevX = mp.x;
+        const prevY = mp.y;
+        if (mp.axis === "x") {
+          mp.x += mp.speed * mp.dir;
+          if (mp.x <= mp.min || mp.x + mp.w >= mp.max) {
+            mp.dir *= -1;
+            mp.x = clamp(mp.x, mp.min, mp.max - mp.w);
+          }
+        } else {
+          mp.y += mp.speed * mp.dir;
+          if (mp.y <= mp.min || mp.y + mp.h >= mp.max) {
+            mp.dir *= -1;
+            mp.y = clamp(mp.y, mp.min, mp.max - mp.h);
+          }
+        }
+        mp.dx = mp.x - prevX;
+        mp.dy = mp.y - prevY;
+      }
+    }
+
+    function updateCheckpoints(level) {
+      for (const cp of level.checkpoints) {
+        const pRect = { x: player.x, y: player.y, w: player.w, h: player.h };
+        const cpRect = { x: cp.x - 12, y: cp.y - 62, w: 24, h: 62 };
+        if (!cp.activated && rectsOverlap(pRect, cpRect)) {
+          cp.activated = true;
+          player.checkpoint = { x: cp.x - 18, y: cp.y - 30 };
+          setStatus("Checkpoint!");
+        }
+      }
+    }
+
+    function respawnPlayer() {
+      player.x = player.checkpoint.x;
+      player.y = player.checkpoint.y;
+      player.vx = 0;
+      player.vy = 0;
+      player.onGround = false;
+      player.wallSliding = false;
+      player.wallDir = 0;
+    }
+
+    function checkSpikes(level) {
+      for (const spike of level.spikes) {
+        const pRect = { x: player.x, y: player.y, w: player.w, h: player.h };
+        if (rectsOverlap(pRect, spike)) {
+          respawnPlayer();
+          setStatus("Spiked!");
+          return;
+        }
+      }
+    }
+
+    function checkEnemies(level) {
+      for (const enemy of level.enemies) {
+        const pRect = { x: player.x, y: player.y, w: player.w, h: player.h };
+        const eRect = { x: enemy.x, y: enemy.y, w: enemy.w, h: enemy.h };
+        if (rectsOverlap(pRect, eRect)) {
+          respawnPlayer();
+          setStatus("Hit!");
+          return;
+        }
+
+        enemy.x += enemy.speed * enemy.dir;
+        if (enemy.x <= enemy.minX || enemy.x + enemy.w >= enemy.maxX) {
+          enemy.dir *= -1;
+          enemy.x = clamp(enemy.x, enemy.minX, enemy.maxX - enemy.w);
+        }
+      }
+    }
+
+    function collectApples(level) {
+      for (const apple of level.apples) {
+        if (!apple.collected) {
+          const dx = (player.x + player.w / 2) - apple.x;
+          const dy = (player.y + player.h / 2) - apple.y;
+          const distSq = dx * dx + dy * dy;
+          if (distSq < 1200) {
+            apple.collected = true;
+            player.apples += 1;
+            setStatus("Apple!");
+          }
+        }
+      }
+    }
+
+    function handleGoal(level) {
+      const pRect = { x: player.x, y: player.y, w: player.w, h: player.h };
+      const goalRect = { x: level.goal.x - 20, y: level.goal.y, w: level.goal.w + 40, h: level.goal.h };
+      if (player.apples >= player.maxApples && rectsOverlap(pRect, goalRect)) {
+        if (game.levelIndex < game.levels.length - 1) {
+          setStatus("Level complete!");
+          setTimeout(() => {
+            game.levelIndex += 1;
+            initLevel(game.levelIndex);
+          }, 800);
+        } else {
+          setStatus("YOU WIN!");
+          game.win = true;
+          game.gameOver = true;
+        }
+      }
+    }
+
+    function detectWallTouch() {
+      const rect = { x: player.x, y: player.y, w: player.w, h: player.h };
+      for (const solid of getSolidRects()) {
+        if (rectsOverlap(rect, solid)) {
+          const leftDist = solid.x + solid.w - player.x;
+          const rightDist = player.x + player.w - solid.x;
+          if (Math.min(leftDist, rightDist) < 12) return true;
+        }
+      }
+      return false;
+    }
+
+    function getWallSide() {
+      const rect = { x: player.x, y: player.y, w: player.w, h: player.h };
+      for (const solid of getSolidRects()) {
+        if (rectsOverlap(rect, solid)) {
+          const leftDist = solid.x + solid.w - player.x;
+          const rightDist = player.x + player.w - solid.x;
+          if (Math.min(leftDist, rightDist) < 12) {
+            return leftDist < rightDist ? 1 : -1;
+          }
+        }
+      }
+      return 0;
+    }
+
+    function updatePlayer() {
+      const level = currentLevel();
+      if (game.win || game.gameOver) return;
+
+      const left = keys.a || keys.arrowleft;
+      const right = keys.d || keys.arrowright;
+
+      if (player.jumpBuffer > 0) player.jumpBuffer -= 1;
+      if (player.coyote > 0) player.coyote -= 1;
+      if (player.wallJumpCD > 0) player.wallJumpCD -= 1;
+
+      const accel = player.onGround ? WORLD.moveAccel : WORLD.airAccel;
+      if (left) { player.vx -= accel; player.facing = -1; }
+      if (right) { player.vx += accel; player.facing = 1; }
+      if (!left && !right) {
+        player.vx *= player.onGround ? WORLD.friction : 0.94;
+        if (Math.abs(player.vx) < 0.05) player.vx = 0;
+      }
+      player.vx = clamp(player.vx, -WORLD.maxRun, WORLD.maxRun);
+
+      const touchingWall = detectWallTouch();
+      player.wallSliding = false;
+      player.wallDir = 0;
+      if (touchingWall && !player.onGround && player.vy >= 0) {
+        const wallSide = getWallSide();
+        player.wallSliding = true;
+        player.wallDir = wallSide;
+        if (player.vy > 0.5) player.vy *= 0.4;
+      }
+
+      const jumpRequested = player.jumpBuffer > 0;
+      if (jumpRequested && (player.onGround || player.coyote > 0)) {
+        player.vy = -WORLD.jumpStrength;
+        player.onGround = false;
+        player.jumpBuffer = 0;
+        player.coyote = 0;
+      } else if (jumpRequested && touchingWall && !player.onGround && player.wallJumpCD <= 0) {
+        player.vy = -WORLD.wallJumpY;
+        player.vx = WORLD.wallJumpX * -player.wallDir;
+        player.jumpBuffer = 0;
+        player.wallSliding = false;
+        player.wallDir = 0;
+        player.wallJumpCD = 6;
+        setStatus("Wall Jump!");
+      }
+
+      player.vy += WORLD.gravity;
+
+      player.x += player.vx;
+      for (const rect of getSolidRects()) {
+        const pRect = { x: player.x, y: player.y, w: player.w, h: player.h };
+        if (rectsOverlap(pRect, rect)) {
+          if (player.vx > 0) player.x = rect.x - player.w;
+          else if (player.vx < 0) player.x = rect.x + rect.w;
+          player.vx = 0;
+        }
+      }
+
+      player.y += player.vy;
+      player.onGround = false;
+      for (const rect of getSolidRects()) {
+        const pRect = { x: player.x, y: player.y, w: player.w, h: player.h };
+        if (rectsOverlap(pRect, rect)) {
+          if (player.vy > 0) {
+            player.y = rect.y - player.h;
+            player.vy = 0;
+            player.onGround = true;
+            player.coyote = WORLD.coyoteTime;
+          } else if (player.vy < 0) {
+            player.y = rect.y + rect.h;
+            player.vy = 0;
+          }
+        }
+      }
+
+      for (const rect of level.movingPlatforms) {
+        const pRect = { x: player.x, y: player.y, w: player.w, h: player.h };
+        if (player.onGround && rectsOverlap(pRect, rect)) {
+          player.x += rect.dx || 0;
+          player.y += rect.dy || 0;
+        }
+      }
+
+      if (player.x < 0) player.x = 0;
+      if (player.x + player.w > level.width) player.x = level.width - player.w;
+      if (player.y > level.height + 300) respawnPlayer();
+
+      updateCheckpoints(level);
+      collectApples(level);
+      checkSpikes(level);
+      checkEnemies(level);
+      handleGoal(level);
+
+      appleLabel.textContent = `Apples: ${player.apples} / ${player.maxApples}`;
+    }
+
+    function updateCamera() {
+      const targetX = clamp(player.x - canvas.width * 0.35, 0, currentLevel().width - canvas.width);
+      const targetY = clamp(player.y - canvas.height * 0.5, 0, currentLevel().height - canvas.height);
+      game.cameraTargetX = targetX;
+      game.cameraTargetY = targetY;
+      game.cameraX += (game.cameraTargetX - game.cameraX) * 0.14;
+      game.cameraY += (game.cameraTargetY - game.cameraY) * 0.14;
+    }
+
+    function drawBackground(level) {
+      ctx.fillStyle = level.bg;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = "rgba(255,255,255,0.12)";
+      for (let i = 0; i < 12; i++) {
+        const x = (i * 400 - (game.cameraX * 0.15)) % (canvas.width + 400);
+        ctx.beginPath();
+        ctx.ellipse(x, 120, 80, 40, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(x + 50, 100, 60, 35, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function drawPlatforms(level) {
+      for (const platform of level.platforms) {
+        const x = platform.x - game.cameraX;
+        const y = platform.y - game.cameraY;
+        if (platform.type === "wall") {
+          ctx.fillStyle = "#d97706";
+          ctx.fillRect(x, y, platform.w, platform.h);
+          ctx.fillStyle = "rgba(0,0,0,0.2)";
+          ctx.fillRect(x, y, platform.w, 8);
+        } else {
+          ctx.fillStyle = "#f59e0b";
+          ctx.fillRect(x, y, platform.w, platform.h);
+          ctx.fillStyle = "rgba(0,0,0,0.15)";
+          ctx.fillRect(x, y + platform.h - 12, platform.w, 12);
+        }
+      }
+
+      for (const mp of level.movingPlatforms) {
+        const x = mp.x - game.cameraX;
+        const y = mp.y - game.cameraY;
+        ctx.fillStyle = "#8b5cf6";
+        ctx.fillRect(x, y, mp.w, mp.h);
+        ctx.fillStyle = "rgba(255,255,255,0.25)";
+        ctx.fillRect(x + 6, y + 6, mp.w - 12, 8);
+      }
+    }
+
+    function drawApples(level) {
+      for (const apple of level.apples) {
+        if (apple.collected) continue;
+        const x = apple.x - game.cameraX;
+        const y = apple.y - game.cameraY;
+        ctx.fillStyle = "#facc15";
+        ctx.beginPath();
+        ctx.arc(x, y, 16, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#92400e";
+        ctx.fillRect(x - 3, y + 14, 6, 18);
+        ctx.fillStyle = "#22c55e";
+        ctx.fillRect(x - 8, y + 30, 16, 8);
+      }
+    }
+
+    function drawCheckpoints(level) {
+      for (const cp of level.checkpoints) {
+        const x = cp.x - game.cameraX;
+        const y = cp.y - game.cameraY;
+        ctx.fillStyle = cp.activated ? "#22c55e" : "#e5e7eb";
+        ctx.fillRect(x - 12, y - 60, 24, 60);
+        ctx.fillStyle = cp.activated ? "#16a34a" : "#cbd5e1";
+        ctx.beginPath();
+        ctx.moveTo(x, y - 60);
+        ctx.lineTo(x - 12, y - 75);
+        ctx.lineTo(x + 12, y - 75);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
+    function drawSpikes(level) {
+      for (const spike of level.spikes) {
+        const x = spike.x - game.cameraX;
+        const y = spike.y - game.cameraY;
+        ctx.fillStyle = "#374151";
+        const count = Math.floor(spike.w / 18);
+        for (let i = 0; i < count; i++) {
+          ctx.beginPath();
+          ctx.moveTo(x + i * 18, y + spike.h);
+          ctx.lineTo(x + i * 18 + 9, y);
+          ctx.lineTo(x + i * 18 + 18, y + spike.h);
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+    }
+
+    function drawEnemies(level) {
+      for (const enemy of level.enemies) {
+        const x = enemy.x - game.cameraX;
+        const y = enemy.y - game.cameraY;
+        ctx.fillStyle = "#ef4444";
+        ctx.fillRect(x, y, enemy.w, enemy.h);
+        ctx.fillStyle = "#fca5a5";
+        ctx.fillRect(x + 8, y + 8, 8, 8);
+        ctx.fillRect(x + enemy.w - 16, y + 8, 8, 8);
+      }
+    }
+
+    function drawGoal(level) {
+      const x = level.goal.x - game.cameraX;
+      const y = level.goal.y - game.cameraY;
+      ctx.fillStyle = "#22c55e";
+      ctx.fillRect(x, y, level.goal.w, level.goal.h);
+      ctx.fillStyle = "#bbf7d0";
+      for (let i = 0; i < 3; i++) {
+        ctx.fillRect(x + 8 + i * 10, y + 12, 6, level.goal.h - 24);
+      }
+    }
+
+    function drawPlayer() {
+      const x = player.x - game.cameraX;
+      const y = player.y - game.cameraY;
+      ctx.fillStyle = "#111827";
+      ctx.fillRect(x, y, player.w, player.h);
+      ctx.fillStyle = "#f8fafc";
+      ctx.fillRect(x + 7, y + 12, 7, 7);
+      ctx.fillRect(x + player.w - 14, y + 12, 7, 7);
+      ctx.fillStyle = "#1f2937";
+      const eyeOffset = player.facing === 1 ? 3 : 1;
+      ctx.fillRect(x + 8 + eyeOffset, y + 14, 3, 3);
+      ctx.fillRect(x + player.w - 13 + eyeOffset, y + 14, 3, 3);
+      ctx.strokeStyle = "#ef4444";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(x + player.w / 2, y + 28, 8, 0, Math.PI);
+      ctx.stroke();
+      if (player.wallSliding) {
+        ctx.strokeStyle = "#facc15";
+        ctx.lineWidth = 4;
+        ctx.globalAlpha = 0.7;
+        ctx.beginPath();
+        ctx.moveTo(x + player.w / 2, y + 8);
+        ctx.lineTo(x + player.w / 2 + player.wallDir * 16, y + 32);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    function drawWinOverlay() {
+      if (!game.win && !game.gameOver) return;
+      ctx.fillStyle = "rgba(0,0,0,0.5)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 72px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText("YOU WIN!", canvas.width / 2, canvas.height / 2 - 40);
+      ctx.font = "bold 32px Arial";
+      ctx.fillText("All levels complete!", canvas.width / 2, canvas.height / 2 + 40);
+      ctx.font = "24px Arial";
+      ctx.fillText("Press R to restart", canvas.width / 2, canvas.height / 2 + 100);
+      ctx.textAlign = "left";
+    }
+
+    function render() {
+      const level = currentLevel();
+      drawBackground(level);
+      drawPlatforms(level);
+      drawSpikes(level);
+      drawCheckpoints(level);
+      drawEnemies(level);
+      drawApples(level);
+      drawGoal(level);
+      drawPlayer();
+      drawWinOverlay();
+    }
+
+    window.addEventListener("keydown", (e) => {
+      const key = e.key.toLowerCase();
+      keys[key] = true;
+      if (["arrowup", "w", " ", "spacebar"].includes(key)) {
+        if (!inputs.jumpHeld) {
+          inputs.jumpHeld = true;
+          player.jumpBuffer = WORLD.jumpBuffer;
+        }
+      }
+      if (e.key === "r" || e.key === "R") initLevel(game.levelIndex);
+    });
+
+    window.addEventListener("keyup", (e) => {
+      const key = e.key.toLowerCase();
+      keys[key] = false;
+      if (["arrowup", "w", " ", "spacebar"].includes(key)) inputs.jumpHeld = false;
+    });
+
+    function gameLoop() {
+      const level = currentLevel();
+      updateMovingPlatforms(level);
+      updatePlayer();
+      updateCamera();
+      render();
+      requestAnimationFrame(gameLoop);
+    }
+
+    initLevel(0);
+    requestAnimationFrame(gameLoop);
+  </script>
+</body>
+</html>
